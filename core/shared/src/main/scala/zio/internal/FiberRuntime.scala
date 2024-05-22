@@ -307,7 +307,9 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
           throw new IllegalStateException("It is illegal to have multiple concurrent run loops in a single fiber")
 
         case FiberMessage.YieldNow =>
-        // Ignore yield message
+          inbox.add(FiberMessage.YieldNow)
+          inbox.add(FiberMessage.Resume(cur))
+          throw AsyncJump
       }
       message = inbox.poll()
     }
@@ -1423,6 +1425,9 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
 
   private[zio] def tellInterrupt(cause: Cause[Nothing]): Unit =
     tell(FiberMessage.InterruptSignal(cause))
+
+  def tellYieldNow(): Unit =
+    tell(FiberMessage.YieldNow)
 
   /**
    * Transfers all children of this fiber that are currently running to the
