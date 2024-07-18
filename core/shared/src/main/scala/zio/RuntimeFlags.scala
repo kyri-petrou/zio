@@ -107,6 +107,10 @@ object RuntimeFlags {
 
   object Patch {
 
+    // Commonly used pre-computed patches made final and thus inlinable
+    private[zio] final val disableInterruption = 1L
+    private[zio] final val enableInterruption  = 4294967297L
+
     def andThen(first: Patch, second: Patch): Patch =
       first | second
 
@@ -210,9 +214,6 @@ object RuntimeFlags {
    */
   def enable(flag: RuntimeFlag): RuntimeFlags.Patch =
     RuntimeFlags.Patch(flag.mask, flag.mask)
-
-  private[zio] val disableInterruption: RuntimeFlags.Patch = disable(RuntimeFlag.Interruption)
-  private[zio] val enableInterruption: RuntimeFlags.Patch  = enable(RuntimeFlag.Interruption)
 
   /**
    * No runtime flags.

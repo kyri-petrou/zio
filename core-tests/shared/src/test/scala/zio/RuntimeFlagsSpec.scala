@@ -127,6 +127,14 @@ object RuntimeFlagsSpec extends ZIOBaseSpec {
                 name <- ZIO.succeed(Thread.currentThread().getName)
               } yield assertTrue(name.startsWith("ZScheduler-Worker"))
             }.provide(Runtime.enableFlags(RuntimeFlag.EagerShiftBack))
-        } @@ TestAspect.jvmOnly
+        } @@ TestAspect.jvmOnly +
+        suite("precomputed patches")(
+          test("disable interruption") {
+            assertTrue(RuntimeFlags.Patch.disableInterruption == RuntimeFlags.disable(RuntimeFlag.Interruption))
+          },
+          test("enable interruption") {
+            assertTrue(RuntimeFlags.Patch.enableInterruption == RuntimeFlags.enable(RuntimeFlag.Interruption))
+          }
+        )
     }
 }

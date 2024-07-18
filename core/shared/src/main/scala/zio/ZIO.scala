@@ -4863,10 +4863,12 @@ object ZIO extends ZIOCompanionPlatformSpecific with ZIOCompanionVersionSpecific
   )(implicit trace: Trace): ZIO[R, E, A] =
     ZIO.UpdateRuntimeFlagsWithin.DynamicNoBox(
       trace,
-      RuntimeFlags.disable(RuntimeFlag.Interruption),
+      RuntimeFlags.Patch.disableInterruption,
       oldFlags =>
-        if (RuntimeFlags.interruption(oldFlags)) f(InterruptibilityRestorer.MakeInterruptible)
-        else f(InterruptibilityRestorer.MakeUninterruptible)
+        f {
+          if (RuntimeFlags.interruption(oldFlags)) InterruptibilityRestorer.MakeInterruptible
+          else InterruptibilityRestorer.MakeUninterruptible
+        }
     )
 
   /**
@@ -5983,13 +5985,13 @@ object ZIO extends ZIOCompanionPlatformSpecific with ZIOCompanionVersionSpecific
   private[zio] object UpdateRuntimeFlagsWithin extends UpdateRuntimeFlagsWithinPlatformSpecific {
     final case class Interruptible[R, E, A](trace: Trace, effect: ZIO[R, E, A])
         extends UpdateRuntimeFlagsWithin[R, E, A] {
-      def update: RuntimeFlags.Patch = RuntimeFlags.enableInterruption
+      def update: RuntimeFlags.Patch = RuntimeFlags.Patch.enableInterruption
 
       def scope(oldRuntimeFlags: RuntimeFlags): ZIO[R, E, A] = effect
     }
     final case class Uninterruptible[R, E, A](trace: Trace, effect: ZIO[R, E, A])
         extends UpdateRuntimeFlagsWithin[R, E, A] {
-      def update: RuntimeFlags.Patch = RuntimeFlags.disableInterruption
+      def update: RuntimeFlags.Patch = RuntimeFlags.Patch.disableInterruption
 
       def scope(oldRuntimeFlags: RuntimeFlags): ZIO[R, E, A] = effect
     }

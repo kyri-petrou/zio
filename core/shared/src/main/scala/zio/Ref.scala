@@ -316,15 +316,8 @@ object Ref extends Serializable {
         def get(implicit unsafe: Unsafe): A =
           value.get
 
-        def getAndSet(a: A)(implicit unsafe: Unsafe): A = {
-          var loop       = true
-          var current: A = null.asInstanceOf[A]
-          while (loop) {
-            current = value.get
-            loop = !value.compareAndSet(current, a)
-          }
-          current
-        }
+        def getAndSet(a: A)(implicit unsafe: Unsafe): A =
+          value.getAndSet(a)
 
         def getAndUpdate(f: A => A)(implicit unsafe: Unsafe): A = {
           var loop       = true
@@ -342,7 +335,7 @@ object Ref extends Serializable {
           var current: A = null.asInstanceOf[A]
           while (loop) {
             current = value.get
-            val next = pf.applyOrElse(current, (_: A) => current)
+            val next = pf.applyOrElse(current, ZIO.identityFn[A])
             loop = !value.compareAndSet(current, next)
           }
           current
@@ -365,7 +358,7 @@ object Ref extends Serializable {
           var b: B = null.asInstanceOf[B]
           while (loop) {
             val current = value.get
-            val tuple   = pf.applyOrElse(current, (_: A) => (default, current))
+            val tuple   = pf.applyOrElse(current, (cur: A) => (default, cur))
             b = tuple._1
             loop = !value.compareAndSet(current, tuple._2)
           }
@@ -405,7 +398,7 @@ object Ref extends Serializable {
           var next: A = null.asInstanceOf[A]
           while (loop) {
             val current = value.get
-            next = pf.applyOrElse(current, (_: A) => current)
+            next = pf.applyOrElse(current, ZIO.identityFn[A])
             loop = !value.compareAndSet(current, next)
           }
           ()
@@ -416,7 +409,7 @@ object Ref extends Serializable {
           var next: A = null.asInstanceOf[A]
           while (loop) {
             val current = value.get
-            next = pf.applyOrElse(current, (_: A) => current)
+            next = pf.applyOrElse(current, ZIO.identityFn[A])
             loop = !value.compareAndSet(current, next)
           }
           next

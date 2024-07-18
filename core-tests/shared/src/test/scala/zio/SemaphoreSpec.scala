@@ -1,22 +1,22 @@
 package zio
 
-import zio._
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
 
 object SemaphoreSpec extends ZIOBaseSpec {
-  override def spec = suite("SemaphoreSpec")(
+
+  private def tests(n: Long) = List(
     test("withPermit automatically releases the permit if the effect is interrupted") {
       for {
         promise   <- Promise.make[Nothing, Unit]
-        semaphore <- Semaphore.make(1)
+        semaphore <- Semaphore.make(n)
         effect     = semaphore.withPermit(promise.succeed(()) *> ZIO.never)
         fiber     <- effect.fork
         _         <- promise.await
         _         <- fiber.interrupt
         permits   <- semaphore.available
-      } yield assert(permits)(equalTo(1L))
+      } yield assert(permits)(equalTo(n))
     } @@ jvm(nonFlaky),
     test("withPermit acquire is interruptible") {
       for {
@@ -28,10 +28,14 @@ object SemaphoreSpec extends ZIOBaseSpec {
     } @@ jvm(nonFlaky),
     test("withPermitsScoped releases same number of permits") {
       for {
-        semaphore <- Semaphore.make(2L)
-        _         <- ZIO.scoped(semaphore.withPermitsScoped(2))
+        semaphore <- Semaphore.make(n)
+        _         <- ZIO.scoped(semaphore.withPermitsScoped(n))
         permits   <- semaphore.available
-      } yield assertTrue(permits == 2L)
+      } yield assertTrue(permits == n)
     }
+  )
+  override def spec = suite("SemaphoreSpec")(
+    suite("single permit")(tests(1L)),
+    suite("multiple permits")(tests(2L))
   )
 }

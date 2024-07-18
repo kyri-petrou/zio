@@ -16,7 +16,6 @@
 
 package zio
 
-import zio.Promise.internal._
 import zio.stacktracer.TracingImplicits.disableAutoTrace
 
 import java.util.concurrent.atomic.AtomicReference
@@ -39,9 +38,10 @@ import java.util.concurrent.atomic.AtomicReference
  * }}}
  */
 final class Promise[E, A] private (
-  private val state: AtomicReference[Promise.internal.State[E, A]],
+  private val state: AtomicReference[AnyRef],
   blockingOn: FiberId
 ) extends Serializable {
+  private type K = IO[E, A] => Unit
 
   /**
    * Retrieves the value of the promise, suspending the fiber running the action
@@ -50,35 +50,32 @@ final class Promise[E, A] private (
   def await(implicit trace: Trace): IO[E, A] =
     ZIO.suspendSucceed {
       state.get match {
-        case Done(value) =>
-          value
-        case _ =>
+        case _: List[K] =>
           ZIO.asyncInterrupt[Any, E, A](
             k => {
               var result = null.asInstanceOf[Either[UIO[Any], IO[E, A]]]
               var retry  = true
 
               while (retry) {
-                val oldState = state.get
 
-                val newState = oldState match {
-                  case Pending(joiners) =>
-                    result = Left(interruptJoiner(k))
-
-                    Pending(k :: joiners)
-                  case s @ Done(value) =>
-                    result = Right(value)
-
-                    s
+                state.get match {
+                  case old: List[K] =>
+                    if (state.compareAndSet(old, k :: old)) {
+                      result = Left(interruptJoiner(k))
+                      retry = false
+                    }
+                  case value =>
+                    result = Right(value.asInstanceOf[IO[E, A]])
+                    retry = false
                 }
-
-                retry = !state.compareAndSet(oldState, newState)
               }
 
               result
             },
             blockingOn
           )
+        case value =>
+          value.asInstanceOf[IO[E, A]]
       }
     }
 
@@ -180,17 +177,16 @@ final class Promise[E, A] private (
     var retry = true
 
     while (retry) {
-      val oldState = state.get
-
-      val newState = oldState match {
-        case Pending(joiners) =>
-          Pending(joiners.filter(j => !j.eq(joiner)))
+      state.get match {
+        case old: List[K] =>
+          val newState = old.filter(j => !j.eq(joiner))
+          if (state.compareAndSet(old, newState)) {
+            retry = true
+          }
 
         case _ =>
-          oldState
+          retry = false
       }
-
-      retry = !state.compareAndSet(oldState, newState)
     }
   }
 
@@ -210,51 +206,33 @@ final class Promise[E, A] private (
   @transient private[zio] val unsafe: UnsafeAPI =
     new UnsafeAPI {
       def completeWith(io: IO[E, A])(implicit unsafe: Unsafe): Boolean = {
-        var action: () => Boolean = null.asInstanceOf[() => Boolean]
-        var retry                 = true
+        var loop    = true
+        var joiners = Nil.asInstanceOf[List[K]]
 
-        while (retry) {
-          val oldState = state.get
-
-          val newState = oldState match {
-            case Pending(joiners) =>
-              action = () => { joiners.foreach(_(io)); true }
-
-              Done(io)
-
-            case _ =>
-              action = Promise.ConstFalse
-
-              oldState
+        while (loop) {
+          state.get match {
+            case old: List[K] =>
+              if (state.compareAndSet(old, io)) {
+                joiners = old
+                loop = false
+              }
+            case _ => return false
           }
-
-          retry = !state.compareAndSet(oldState, newState)
         }
 
-        action()
+        while (joiners ne Nil) {
+          joiners.head.apply(io)
+          joiners = joiners.tail
+        }
+        true
       }
 
       def die(e: Throwable)(implicit trace: Trace, unsafe: Unsafe): Boolean =
         completeWith(ZIO.die(e))
 
       def done(io: IO[E, A])(implicit unsafe: Unsafe): Unit = {
-        var retry: Boolean                 = true
-        var joiners: List[IO[E, A] => Any] = null
-
-        while (retry) {
-          val oldState = state.get
-
-          val newState = oldState match {
-            case Pending(js) =>
-              joiners = js
-              Done(io)
-            case _ => oldState
-          }
-
-          retry = !state.compareAndSet(oldState, newState)
-        }
-
-        if (joiners ne null) joiners.foreach(_(io))
+        completeWith(io)
+        ()
       }
 
       def fail(e: E)(implicit trace: Trace, unsafe: Unsafe): Boolean =
@@ -267,12 +245,12 @@ final class Promise[E, A] private (
         completeWith(ZIO.interruptAs(fiberId))
 
       def isDone(implicit unsafe: Unsafe): Boolean =
-        state.get().isInstanceOf[Done[?, ?]]
+        state.get().isInstanceOf[ZIO.Erased]
 
       def poll(implicit unsafe: Unsafe): Option[IO[E, A]] =
         state.get() match {
-          case _: Pending[?, ?] => None
-          case Done(io)         => Some(io)
+          case _: List[?] => None
+          case io         => Some(io.asInstanceOf[IO[E, A]])
         }
 
       def refailCause(e: Cause[E])(implicit trace: Trace, unsafe: Unsafe): Boolean =
@@ -287,9 +265,12 @@ object Promise {
   private val ConstFalse: () => Boolean = () => false
 
   private[zio] object internal {
-    sealed abstract class State[E, A]                              extends Serializable with Product
+    @deprecated(since = "2.1.7")
+    sealed abstract class State[E, A] extends Serializable with Product
+    @deprecated(since = "2.1.7")
     final case class Pending[E, A](joiners: List[IO[E, A] => Any]) extends State[E, A]
-    final case class Done[E, A](value: IO[E, A])                   extends State[E, A]
+    @deprecated(since = "2.1.7")
+    final case class Done[E, A](value: IO[E, A]) extends State[E, A]
   }
 
   /**
@@ -305,6 +286,6 @@ object Promise {
 
   object unsafe {
     def make[E, A](fiberId: FiberId)(implicit unsafe: Unsafe): Promise[E, A] =
-      new Promise[E, A](new AtomicReference[State[E, A]](new internal.Pending[E, A](Nil)), fiberId)
+      new Promise[E, A](new AtomicReference[AnyRef](Nil), fiberId)
   }
 }
