@@ -1,6 +1,5 @@
 package zio
 
-import zio._
 import zio.test.Assertion._
 import zio.test.TestAspect._
 import zio.test._
@@ -28,10 +27,12 @@ object SemaphoreSpec extends ZIOBaseSpec {
     } @@ exceptJS(nonFlaky),
     test("withPermitsScoped releases same number of permits") {
       for {
-        semaphore <- Semaphore.make(2L)
-        _         <- ZIO.scoped(semaphore.withPermitsScoped(2))
+        semaphore <- Semaphore.make(3L)
+        ref       <- Ref.make(-1L)
+        _         <- ZIO.scoped(semaphore.withPermitsScoped(2) *> semaphore.available.flatMap(ref.set))
         permits   <- semaphore.available
-      } yield assertTrue(permits == 2L)
-    }
+        inner     <- ref.get
+      } yield assertTrue(permits == 3L, inner == 1L)
+    } @@ exceptJS(nonFlaky)
   )
 }
