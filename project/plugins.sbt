@@ -16,6 +16,7 @@ addSbtPlugin("org.scala-native"                  % "sbt-scala-native"           
 addSbtPlugin("org.scalameta"                     % "sbt-scalafmt"                  % "2.5.2")
 addSbtPlugin("pl.project13.scala"                % "sbt-jcstress"                  % "0.2.0")
 addSbtPlugin("pl.project13.scala"                % "sbt-jmh"                       % "0.4.7")
+addSbtPlugin("io.get-coursier"                   % "sbt-shading"                   % "2.1.5")
 
 addSbtPlugin("org.jetbrains.scala" % "sbt-ide-settings" % "1.1.2")
 

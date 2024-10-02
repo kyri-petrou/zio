@@ -1,3 +1,4 @@
+import coursier.ShadingPlugin.autoImport.*
 import explicitdeps.ExplicitDepsPlugin.autoImport.*
 import mdoc.MdocPlugin.autoImport.{mdocIn, mdocOut}
 import sbt.*
@@ -47,6 +48,19 @@ object BuildHelper {
     "-Ywarn-numeric-widen",
     "-Ywarn-value-discard"
   )
+
+  lazy val jctoolsSettings = {
+    val dep = "org.jctools" % "jctools-core" % "4.0.5"
+    Seq(
+      libraryDependencies += dep,
+      shadedDependencies += dep,
+      shadingRules ++= Seq(
+        ShadingRule.moveUnder("org.jctools", "zio.shaded"),
+        ShadingRule.rename("module-info", "zio.shaded.module-info")
+      ),
+      validNamespaces += "zio",
+    )
+  }
 
   private def optimizerOptions(optimize: Boolean, isScala213: Boolean, projectName: String) =
     if (optimize) {

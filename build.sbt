@@ -203,6 +203,7 @@ lazy val root = project
   .enablePlugins(ScalaJSPlugin)
 
 lazy val core = crossProject(JSPlatform, JVMPlatform, NativePlatform)
+  .enablePlugins(ShadingPlugin)
   .in(file("core"))
   .dependsOn(internalMacros, stacktracer)
   .settings(stdSettings("zio"))
@@ -214,6 +215,7 @@ lazy val core = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .settings(scalacOptions += "-Wconf:msg=[zio.stacktracer.TracingImplicits.disableAutoTrace]:silent")
   .jvmSettings(
     replSettings,
+    jctoolsSettings,
     mimaSettings(failOnProblem = true)
   )
   .jsSettings(
