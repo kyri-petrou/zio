@@ -1261,7 +1261,7 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
           // TODO: ClosedByInterruptException (but Scala.js??)
           case interruptedException: InterruptedException =>
             if (cur ne null) updateLastTrace(cur.trace)
-            cur = drainQueueWhileRunning(Exit.Failure(Cause.interrupt(FiberId.None) ++ Cause.die(interruptedException)))
+            cur = Exit.Failure(Cause.interrupt(FiberId.None) ++ Cause.die(interruptedException))
         }
       }
     }
