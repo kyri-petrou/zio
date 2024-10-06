@@ -55,8 +55,8 @@ object BuildHelper {
       libraryDependencies += dep,
       shadedDependencies += dep,
       shadingRules ++= Seq(
-        ShadingRule.moveUnder("org.jctools", "zio.shaded"),
-        ShadingRule.rename("module-info", "zio.shaded.module-info")
+        ShadingRule.moveUnder("org.jctools", "zio.internal.shaded"),
+        ShadingRule.rename("module-info", "zio.internal.shaded.module-info")
       ),
       validNamespaces += "zio",
     )

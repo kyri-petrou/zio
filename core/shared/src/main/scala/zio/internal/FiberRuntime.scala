@@ -32,24 +32,23 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
   self =>
   type Erased = ZIO.Erased
 
-  import FiberRuntime.{DisableAssertions, EvaluationSignal, emptyTrace, stackTraceBuilderPool}
+  import FiberRuntime.{DisableAssertions, EvaluationSignal, emptyTrace, stackTraceBuilderPool, FiberMailbox}
   import ZIO._
 
-  private var _lastTrace      = fiberId.location
-  private var _fiberRefs      = fiberRefs0
-  private var _runtimeFlags   = runtimeFlags0
-  private var _blockingOn     = FiberRuntime.notBlockingOn
-  private var _asyncContWith  = null.asInstanceOf[ZIO.Erased => Any]
-  private val running         = new AtomicBoolean(false)
-  private val inbox           = new FiberMailbox
-  private var _children       = null.asInstanceOf[JavaSet[Fiber.Runtime[_, _]]]
-  private var observers       = Nil: List[Exit[E, A] => Unit]
-  private var runningExecutor = null.asInstanceOf[Executor]
-  private var _stack          = null.asInstanceOf[Array[Continuation]]
-  private var _stackSize      = 0
-  private var _isInterrupted  = false
-
-  private var _forksSinceYield = 0
+  private[this] var _lastTrace       = fiberId.location
+  private[this] var _fiberRefs       = fiberRefs0
+  private[this] var _runtimeFlags    = runtimeFlags0
+  private[this] var _blockingOn      = FiberRuntime.notBlockingOn
+  private[this] var _asyncContWith   = null.asInstanceOf[ZIO.Erased => Any]
+  private[this] val running          = new AtomicBoolean(false)
+  private[this] val inbox            = new FiberMailbox
+  private[this] var _children        = null.asInstanceOf[JavaSet[Fiber.Runtime[_, _]]]
+  private[this] var observers        = Nil: List[Exit[E, A] => Unit]
+  private[this] var runningExecutor  = null.asInstanceOf[Executor]
+  private[this] var _stack           = null.asInstanceOf[Array[Continuation]]
+  private[this] var _stackSize       = 0
+  private[this] var _isInterrupted   = false
+  private[this] var _forksSinceYield = 0
 
   private[zio] def shouldYieldBeforeFork(): Boolean =
     if (RuntimeFlags.cooperativeYielding(_runtimeFlags)) {
@@ -249,15 +248,16 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
         }
       }
     } finally {
-      running.set(false)
+      if (evaluationSignal == EvaluationSignal.Done) running.set(false)
     }
 
     // Maybe someone added something to the inbox between us checking, and us
     // giving up the drain. If so, we need to restart the draining, but only
     // if we beat everyone else to the restart:
-    if (!inbox.isEmpty && running.compareAndSet(false, true)) {
-      if (evaluationSignal == EvaluationSignal.YieldNow) drainQueueLaterOnExecutor(true)
-      else drainQueueOnCurrentThread(depth)
+    if (evaluationSignal == EvaluationSignal.YieldNow) {
+      drainQueueLaterOnExecutor(true)
+    } else if (!inbox.isEmpty && running.compareAndSet(false, true)) {
+      drainQueueOnCurrentThread(depth)
     }
   }
 
@@ -1518,7 +1518,7 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
   override def hashCode(): Int = _hashCode
 }
 
-object FiberRuntime {
+object FiberRuntime extends FiberRuntimePlatformSpecific {
   private val emptyTrace = Trace.empty
 
   private final val MaxForksBeforeYield      = 128

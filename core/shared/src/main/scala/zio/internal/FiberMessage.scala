@@ -33,5 +33,5 @@ private[zio] object FiberMessage {
   @deprecated("We no longer use a message to propagate yielding", "2.1.7")
   case object YieldNow extends FiberMessage
 
-  val resumeUnit: FiberMessage = Resume(ZIO.unit)
+  val resumeUnit: FiberMessage = Resume(Exit.unit)
 }
