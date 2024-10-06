@@ -249,16 +249,15 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
         }
       }
     } finally {
-      if (evaluationSignal == EvaluationSignal.Done) running.set(false)
+      running.set(false)
     }
 
     // Maybe someone added something to the inbox between us checking, and us
     // giving up the drain. If so, we need to restart the draining, but only
     // if we beat everyone else to the restart:
-    if (evaluationSignal == EvaluationSignal.YieldNow) {
-      drainQueueLaterOnExecutor(true)
-    } else if (!inbox.isEmpty && running.compareAndSet(false, true)) {
-      drainQueueOnCurrentThread(depth)
+    if (!inbox.isEmpty && running.compareAndSet(false, true)) {
+      if (evaluationSignal == EvaluationSignal.YieldNow) drainQueueLaterOnExecutor(true)
+      else drainQueueOnCurrentThread(depth)
     }
   }
 
