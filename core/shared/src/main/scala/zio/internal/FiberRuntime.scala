@@ -295,9 +295,6 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
     var message = inbox.relaxedPoll()
     if (message eq null) return cur0
 
-    // Unfortunately we can't avoid the virtual call to `trace` here
-    updateLastTrace(cur0.trace)
-
     var cur = cur0
     while (message ne null) {
       message match {
@@ -320,7 +317,7 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
           assert(DisableAssertions)
       }
 
-      message = inbox.poll()
+      message = inbox.relaxedPoll()
     }
 
     cur
@@ -1263,7 +1260,7 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
         } catch {
           // TODO: ClosedByInterruptException (but Scala.js??)
           case interruptedException: InterruptedException =>
-            updateLastTrace(cur.trace)
+            if (cur ne null) updateLastTrace(cur.trace)
             cur = drainQueueWhileRunning(Exit.Failure(Cause.interrupt(FiberId.None) ++ Cause.die(interruptedException)))
         }
       }
