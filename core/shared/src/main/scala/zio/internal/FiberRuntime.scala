@@ -35,20 +35,21 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
   import FiberRuntime.{DisableAssertions, EvaluationSignal, emptyTrace, stackTraceBuilderPool, FiberMailbox}
   import ZIO._
 
-  private[this] var _lastTrace       = fiberId.location
-  private[this] var _fiberRefs       = fiberRefs0
-  private[this] var _runtimeFlags    = runtimeFlags0
-  private[this] var _blockingOn      = FiberRuntime.notBlockingOn
-  private[this] var _asyncContWith   = null.asInstanceOf[ZIO.Erased => Any]
-  private[this] val running          = new AtomicBoolean(false)
-  private[this] val inbox            = new FiberMailbox
-  private[this] var _children        = null.asInstanceOf[JavaSet[Fiber.Runtime[_, _]]]
-  private[this] var observers        = Nil: List[Exit[E, A] => Unit]
-  private[this] var runningExecutor  = null.asInstanceOf[Executor]
-  private[this] var _stack           = null.asInstanceOf[Array[Continuation]]
-  private[this] var _stackSize       = 0
-  private[this] var _isInterrupted   = false
-  private[this] var _forksSinceYield = 0
+  private var _lastTrace      = fiberId.location
+  private var _fiberRefs      = fiberRefs0
+  private var _runtimeFlags   = runtimeFlags0
+  private var _blockingOn     = FiberRuntime.notBlockingOn
+  private var _asyncContWith  = null.asInstanceOf[ZIO.Erased => Any]
+  private val running         = new AtomicBoolean(false)
+  private val inbox           = new FiberMailbox
+  private var _children       = null.asInstanceOf[JavaSet[Fiber.Runtime[_, _]]]
+  private var observers       = Nil: List[Exit[E, A] => Unit]
+  private var runningExecutor = null.asInstanceOf[Executor]
+  private var _stack          = null.asInstanceOf[Array[Continuation]]
+  private var _stackSize      = 0
+  private var _isInterrupted  = false
+
+  private var _forksSinceYield = 0
 
   private[zio] def shouldYieldBeforeFork(): Boolean =
     if (RuntimeFlags.cooperativeYielding(_runtimeFlags)) {
