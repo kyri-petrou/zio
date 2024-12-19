@@ -20,6 +20,7 @@ import zio.internal.UpdateOrderLinkedMap
 
 import java.util.concurrent.ConcurrentHashMap
 import scala.annotation.tailrec
+import scala.collection.mutable.ListBuffer
 import scala.collection.{immutable, mutable}
 import scala.util.control.ControlThrowable
 import scala.util.hashing.MurmurHash3
@@ -67,34 +68,6 @@ final class ZEnvironment[+R] private (
       else self.hashCode == that.hashCode
     case _ => false
   }
-
-  /**
-   * Similar to `equals` but uses reference equality on the map's elements.
-   * Therefore, this method might result in false negatives but never in false
-   * positives.
-   *
-   * Useful for cases where failing the equality check will not produce an
-   * invalid state (e.g., applying optimizations) and we want to avoid the
-   * overhead of strict equality.
-   */
-  private def relaxedEquals(that: ZEnvironment[_]): Boolean =
-    if (self eq that) true
-    else if (self.scope ne that.scope) false
-    else if (self.map eq that.map) true
-    else if (self.map.size != that.map.size) false
-    else {
-      // We check in the reverse order since this is an update-ordered map
-      // We could potentially check only the last element but that might result in a false positive so better be safe
-      val l   = self.map.reverseIterator
-      val r   = that.map.reverseIterator
-      var res = true
-      while (l.hasNext && res) {
-        val (lk, lv) = l.next().asInstanceOf[(LightTypeTag, AnyRef)]
-        val (rk, rv) = r.next().asInstanceOf[(LightTypeTag, AnyRef)]
-        res = lk == rk && (lv eq rv)
-      }
-      res
-    }
 
   /**
    * Retrieves a service from the environment.
@@ -145,7 +118,8 @@ final class ZEnvironment[+R] private (
 
       val it0 = self.map.iterator
       while (it0.hasNext) {
-        val next @ (leftTag, _) = it0.next()
+        val next    = it0.next()
+        val leftTag = next._1
 
         if (set.contains(leftTag)) {
           // Exact match, no need to loop
@@ -220,13 +194,13 @@ final class ZEnvironment[+R] private (
    * the right hand side will be preferred.
    */
   def unionAll[R1](that: ZEnvironment[R1]): ZEnvironment[R with R1] =
-    if (self.relaxedEquals(that)) that.asInstanceOf[ZEnvironment[R with R1]]
+    if (self eq that) that.asInstanceOf[ZEnvironment[R with R1]]
     else {
       var newMap = self.map
       val it     = that.map.iterator
       while (it.hasNext) {
-        val (k, v) = it.next()
-        newMap = newMap.updated(k, v)
+        val kv = it.next()
+        newMap = newMap.updated(kv._1, kv._2)
       }
       val newScope = if (that.scope eq null) self.scope else that.scope
       // Reuse the cache of the right hand-side
@@ -307,9 +281,9 @@ final class ZEnvironment[+R] private (
           val it      = self.map.reverseIterator
           var service = null.asInstanceOf[A]
           while (it.hasNext && service == null) {
-            val (curTag, entry) = it.next()
-            if (taggedIsSubtype(curTag, tag)) {
-              service = entry.asInstanceOf[A]
+            val t = it.next()
+            if (taggedIsSubtype(t._1, tag)) {
+              service = t._2.asInstanceOf[A]
             }
           }
           if (service != null) {
@@ -425,18 +399,13 @@ object ZEnvironment {
           patches.head match {
             case AddScope(scope)          => loop(env.unsafe.addScope(scope)(Unsafe), patches.tail)
             case AddService(service, tag) => loop(env.unsafe.addService(tag, service)(Unsafe), patches.tail)
-            case AndThen(first, second)   => loop(env, erase(first) :: erase(second) :: patches.tail)
-            case _: Empty[?]              => loop(env, patches.tail)
-            case _: RemoveService[?, ?]   => loop(env, patches.tail)
-            case _: UpdateService[?, ?]   => loop(env, patches.tail)
+            case AndThen(first, second)   => loop(env, first :: second :: patches.tail)
+            case _                        => _
           }
 
       val env0 = environment.asInstanceOf[ZEnvironment[Out]]
       if (isEmpty) env0
-      else {
-        val out = loop(environment, self.asInstanceOf[Patch[Any, Any]] :: Nil).asInstanceOf[ZEnvironment[Out]]
-        if (env0.relaxedEquals(out)) env0 else out
-      }
+      else loop(env0, self.asInstanceOf[Patch[Any, Any]] :: Nil).asInstanceOf[ZEnvironment[Out]]
     }
 
     /**
@@ -530,9 +499,6 @@ object ZEnvironment {
     @deprecated("Kept for binary compatibility only. Do not use")
     private final case class UpdateService[Env, Service](update: Service => Service, tag: LightTypeTag)
         extends Patch[Env with Service, Env with Service]
-
-    private def erase[In, Out](patch: Patch[In, Out]): Patch[Any, Any] =
-      patch.asInstanceOf[Patch[Any, Any]]
   }
 
   private val ScopeTag: LightTypeTag =
