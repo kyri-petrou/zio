@@ -17,13 +17,13 @@
 package zio.internal
 
 import scala.annotation.tailrec
-import scala.collection.{AbstractIterator, mutable}
 import scala.collection.immutable.{HashMap, VectorBuilder}
+import scala.collection.{AbstractIterator, mutable}
 import scala.util.hashing.MurmurHash3
 
 private[zio] final class UpdateOrderLinkedMap[K, +V](
   fields: Vector[Any],
-  val underlying: HashMap[K, UpdateOrderLinkedMap.Value[V]]
+  underlying: HashMap[K, UpdateOrderLinkedMap.Value[V]]
 ) extends Serializable { self =>
   import UpdateOrderLinkedMap._
 
@@ -33,59 +33,109 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
 
   def keySet: Set[K] = underlying.keySet
 
+  def getOrNull(key: K): V = {
+    val v = underlying.getOrElse(key, null)
+    if (v eq null) null.asInstanceOf[V]
+    else v.value
+  }
+
   def updated[V1 >: V](key: K, value: V1): UpdateOrderLinkedMap[K, V1] = {
-    val fs          = fields
-    val oldFieldsSz = fs.length
-    val existing    = underlying.getOrElse(key, null)
+    val fs       = fields
+    val map      = underlying
+    val i        = fs.length
+    val existing = map.getOrElse(key, null)
     if (existing eq null) {
-      new UpdateOrderLinkedMap(fs :+ key, underlying.updated(key, Value(oldFieldsSz, value)))
-    } else if (existing.idx == oldFieldsSz - 1) {
+      new UpdateOrderLinkedMap(fs :+ key, map.updated(key, Value(i, value)))
+    } else if (existing.idx == i - 1) {
       // If the entry to be added is at the tail of the fields, we can just update the value
-      new UpdateOrderLinkedMap(fs, underlying.updated(key, existing.copy(value = value)))
+      val newMap = map.updated(key, existing.copy(value = value))
+      if (newMap eq map) self else new UpdateOrderLinkedMap(fs, newMap)
     } else {
-      val arr = Array.ofDim[Any](oldFieldsSz + 1)
-      fs.copyToArray(arr, 0, oldFieldsSz)
-      val oldIdx = existing.idx
-
-      // Calculate next of kin
-      val next = {
-        val next0 = oldIdx + 1
-        val offset = arr(next0) match {
-          case t: Tombstone => t.distance
-          case _            => 0
-        }
-        next0 + offset
-      }
-
-      // Calculate first index of preceding tombstone sequence
-      val first =
-        if (oldIdx == 0) 0
-        else
-          arr(oldIdx - 1) match {
-            case t: Tombstone =>
-              val d = t.distance
-              if (d < 0 && oldIdx >= d) oldIdx + d
-              else if (d < 0) 0
-              else if (d == 1) oldIdx - 1
-              else throw new IllegalStateException("tombstone indicate wrong position: " + d)
-            case _ =>
-              oldIdx
-          }
-
-      // Calculate last index of succeeding tombstone sequence
-      val last = next - 1
-
-      arr(first) = Tombstone(next - first)
-      if (last != first) {
-        arr(last) = Tombstone(first - 1 - last)
-      }
-      if (oldIdx != first && oldIdx != last) {
-        arr(oldIdx) = Tombstone(next - oldIdx)
-      }
-      arr(oldFieldsSz) = key
-
-      new UpdateOrderLinkedMap(arr.toVector, underlying.updated(key, Value(oldFieldsSz, value))).maybeReindex()
+      val arr = Array.ofDim[Any](i + 1)
+      fs.copyToArray(arr, 0, i)
+      val newMap = updateValue[V1](map, arr, i)(key, existing, value)
+      new UpdateOrderLinkedMap(arr.toVector, newMap).maybeReindex()
     }
+  }
+
+  def addAll[V1 >: V](entries: Iterable[(K, V1)]): UpdateOrderLinkedMap[K, V1] =
+    entries.size match {
+      case 0 => self
+      case 1 =>
+        val kv = entries.head
+        updated(kv._1, kv._2)
+      case n =>
+        var i   = fields.length
+        val arr = Array.ofDim[Any](i + n)
+        fields.copyToArray(arr, 0, i)
+        var updated: HashMap[K, Value[V1]] = underlying
+
+        val it = entries.iterator
+        while (it.hasNext) {
+          val kv    = it.next()
+          val key   = kv._1
+          val value = kv._2
+
+          val existing = updated.getOrElse(key, null)
+          if (existing eq null) {
+            updated = updated.updated(key, Value(i, value))
+            arr(i) = key
+          } else {
+            updated = updateValue(updated, arr, i)(key, existing, value)
+          }
+          i += 1
+        }
+        new UpdateOrderLinkedMap(arr.toVector, updated).maybeReindex()
+    }
+
+  private[this] def updateValue[V1 >: V](
+    map: HashMap[K, Value[V1]],
+    arr: Array[Any],
+    i: Int
+  )(
+    key: K,
+    oldValue: Value[V1],
+    newValue: V1
+  ): HashMap[K, Value[V1]] = {
+    val oldIdx = oldValue.idx
+
+    // Calculate next of kin
+    val next = {
+      val next0 = oldIdx + 1
+      val offset = arr(next0) match {
+        case t: Tombstone => t.distance
+        case _            => 0
+      }
+      next0 + offset
+    }
+
+    // Calculate first index of preceding tombstone sequence
+    val first =
+      if (oldIdx == 0) 0
+      else
+        arr(oldIdx - 1) match {
+          case t: Tombstone =>
+            val d = t.distance
+            if (d < 0 && oldIdx >= d) oldIdx + d
+            else if (d < 0) 0
+            else if (d == 1) oldIdx - 1
+            else throw new IllegalStateException("tombstone indicate wrong position: " + d)
+          case _ =>
+            oldIdx
+        }
+
+    // Calculate last index of succeeding tombstone sequence
+    val last = next - 1
+
+    arr(first) = Tombstone(next - first)
+    if (last != first) {
+      arr(last) = Tombstone(first - 1 - last)
+    }
+    if (oldIdx != first && oldIdx != last) {
+      arr(oldIdx) = Tombstone(next - oldIdx)
+    }
+    arr(i) = key
+    map.updated(key, Value(i, newValue))
   }
 
   /**
@@ -172,6 +222,9 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
 
   def toList: List[(K, V)] = iterator.toList
 
+  def toIterable: Iterable[(K, V)] =
+    new OptimizedIterable[(K, V)](iterator, size)
+
   @throws[NoSuchElementException]("When the map is empty")
   def last: (K, V) = {
     val last = fields.last.asInstanceOf[K]
@@ -179,11 +232,13 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
   }
 
   override def hashCode(): Int = MurmurHash3.orderedHash(iterator)
+
+  override def toString: String = iterator.mkString("UpdateOrderLinkedMap(", ", ", ")")
 }
 
-private[zio] object UpdateOrderLinkedMap {
+private[zio] object UpdateOrderLinkedMap extends UpdateOrderLinkedMapCompanionVersionSpecific {
   private final case class Tombstone(distance: Int)
-  final case class Value[+V](idx: Int, value: V)
+  private final case class Value[+V](idx: Int, value: V)
 
   private[this] final val EmptyMap: UpdateOrderLinkedMap[Nothing, Nothing] =
     new UpdateOrderLinkedMap[Nothing, Nothing](Vector.empty, HashMap.empty)

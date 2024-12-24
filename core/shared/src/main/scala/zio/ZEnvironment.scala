@@ -19,7 +19,6 @@ package zio
 import zio.internal.UpdateOrderLinkedMap
 
 import java.util.concurrent.ConcurrentHashMap
-import scala.annotation.tailrec
 import scala.collection.mutable.ListBuffer
 import scala.collection.{immutable, mutable}
 import scala.util.control.ControlThrowable
@@ -58,6 +57,9 @@ final class ZEnvironment[+R] private (
    */
   def add[A](a: A)(implicit tag: Tag[A]): ZEnvironment[R with A] =
     unsafe.add[A](tag.tag, a)(Unsafe)
+
+  private def addAll[A](entries: Iterable[(LightTypeTag, A)])(implicit unsafe: Unsafe): ZEnvironment[R with A] =
+    new ZEnvironment(map.addAll(entries), cache = new ConcurrentHashMap[LightTypeTag, Any], scope = scope)
 
   override def equals(that: Any): Boolean = that match {
     case that: ZEnvironment[_] =>
@@ -105,13 +107,54 @@ final class ZEnvironment[+R] private (
    */
   def prune[R1 >: R](implicit tagged: EnvironmentTag[R1]): ZEnvironment[R1] = {
     val tag = taggedTagType(tagged)
+    if (self.isEmpty && tag == TaggedAny) return self
 
-    // Mutable set lookups are much faster. It also iterates faster. We're better off just allocating here
-    // Why are immutable set lookups so slow???
-    val set = new mutable.HashSet ++= taggedGetServices(tag)
+    val map0   = self.map
+    val scope0 = self.scope
+    val set0   = taggedGetServices(tag)
 
-    if (set.isEmpty || self.isEmpty) self
-    else {
+    if (set0.size == 1) {
+      var env         = null.asInstanceOf[ZEnvironment[R1]]
+      if (isScopeTag(tag)) {
+        if (scope0 ne null) {
+        env = new ZEnvironment(
+          UpdateOrderLinkedMap.empty[LightTypeTag, Any],
+          cache = new ConcurrentHashMap[LightTypeTag, Any],
+          scope = scope0
+        )
+        }
+      } else {
+        val exact = map0.getOrNull(tag)
+        if (exact == null) {
+          val it = map0.iterator
+            while (it.hasNext && (env eq null)) {
+              val next = it.next()
+              if (taggedIsSubtype(next._1, tag)) {
+                env = new ZEnvironment(
+                  UpdateOrderLinkedMap.empty.updated(tag, next._2),
+                  cache = new ConcurrentHashMap[LightTypeTag, Any],
+                  scope = null
+                )
+              }
+            }
+        } else {
+            env = new ZEnvironment(
+            UpdateOrderLinkedMap.empty.updated(tag, exact),
+              cache = new ConcurrentHashMap[LightTypeTag, Any],
+              scope = null
+            )
+        }
+      }
+      if (env eq null)
+        throw new Error(
+          s"Defect in zio.ZEnvironment: $tag statically known to be contained within the environment is missing"
+        )
+      env
+    } else {
+      // Mutable set lookups are much faster. It also iterates faster. We're better off just allocating here
+      // Why are immutable set lookups so slow???
+      val set = new mutable.HashSet ++= set0
+
       val builder = UpdateOrderLinkedMap.newBuilder[LightTypeTag, Any]
       val found   = new mutable.HashSet[LightTypeTag]
       found.sizeHint(set.size)
@@ -161,7 +204,7 @@ final class ZEnvironment[+R] private (
       new ZEnvironment(
         newMap,
         cache = new ConcurrentHashMap[LightTypeTag, Any],
-        scope = if (scopeTags.isEmpty) null else scope
+        scope = if (scopeTags.isEmpty) null else scope0
       )
     }
   }
@@ -196,12 +239,7 @@ final class ZEnvironment[+R] private (
   def unionAll[R1](that: ZEnvironment[R1]): ZEnvironment[R with R1] =
     if (self eq that) that.asInstanceOf[ZEnvironment[R with R1]]
     else {
-      var newMap = self.map
-      val it     = that.map.iterator
-      while (it.hasNext) {
-        val kv = it.next()
-        newMap = newMap.updated(kv._1, kv._2)
-      }
+      val newMap   = self.map.addAll(that.map.toIterable)
       val newScope = if (that.scope eq null) self.scope else that.scope
       // Reuse the cache of the right hand-side
       new ZEnvironment(newMap, cache = new ConcurrentHashMap[LightTypeTag, Any](that.cache), scope = newScope)
@@ -392,20 +430,27 @@ object ZEnvironment {
      * Applies an update to the environment to produce a new environment.
      */
     def apply(environment: ZEnvironment[In]): ZEnvironment[Out] = {
-      @tailrec
-      def loop(env: ZEnvironment[Any], patches: List[Patch[Any, Any]]): ZEnvironment[Any] =
-        if (patches eq Nil) env
-        else
-          patches.head match {
-            case AddScope(scope)          => loop(env.unsafe.addScope(scope)(Unsafe), patches.tail)
-            case AddService(service, tag) => loop(env.unsafe.addService(tag, service)(Unsafe), patches.tail)
-            case AndThen(first, second)   => loop(env, first :: second :: patches.tail)
-            case _                        => _
-          }
-
-      val env0 = environment.asInstanceOf[ZEnvironment[Out]]
+      var env0 = environment.asInstanceOf[ZEnvironment[Out]]
       if (isEmpty) env0
-      else loop(env0, self.asInstanceOf[Patch[Any, Any]] :: Nil).asInstanceOf[ZEnvironment[Out]]
+      else {
+        val nil      = Nil
+        val services = ListBuffer.empty[(LightTypeTag, Any)]
+        var scope    = null.asInstanceOf[Scope]
+        var patches  = self.asInstanceOf[Patch[Any, Any]] :: nil
+
+        while (patches ne nil) {
+          patches.head match {
+            case v: AddService[Any, Any]   => services += ((v.tag, v.service)); patches = patches.tail
+            case v: AddScope[Any, Any]     => scope = v.scope; patches = patches.tail
+            case v: AndThen[Any, Any, Any] => patches = v.first :: v.second :: patches.tail
+            case _                         => patches = patches.tail
+          }
+        }
+
+        if (services.nonEmpty) env0 = env0.addAll(services)(Unsafe)
+        if (scope ne null) env0.unsafe.addScope(scope)(Unsafe)
+        env0
+      }
     }
 
     /**

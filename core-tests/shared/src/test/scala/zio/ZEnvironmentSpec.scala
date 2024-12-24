@@ -87,6 +87,25 @@ object ZEnvironmentSpec extends ZIOBaseSpec {
       val env2  = ZEnvironment("foo", 42)
       val patch = ZEnvironment.Patch.diff(env1, env2)
       assertTrue(patch.isEmpty)
-    }
+    },
+    suite("prune")(
+      test("on empty environment with type Any should return the same environment") {
+        val env    = ZEnvironment.empty
+        val pruned = env.prune[Any]
+        assertTrue(pruned == env)
+      },
+      test("on empty environment with type R should raise error") {
+        val env = ZEnvironment.empty.asInstanceOf[ZEnvironment[String]]
+        try {
+          env.prune[String]
+          assertNever("prune should have thrown an exception")
+        } catch {
+          case e: Throwable =>
+            assertTrue(
+              e.getMessage == "Defect in zio.ZEnvironment: String statically known to be contained within the environment is missing"
+            )
+        }
+      }
+    )
   )
 }
