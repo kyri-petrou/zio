@@ -23,7 +23,7 @@ import scala.util.hashing.MurmurHash3
 
 private[zio] final class UpdateOrderLinkedMap[K, +V](
   fields: Vector[Any],
-  underlying: HashMap[K, UpdateOrderLinkedMap.Value[V]]
+  underlying: HashMap[K, Int]
 ) extends Serializable { self =>
   import UpdateOrderLinkedMap._
 
@@ -34,27 +34,26 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
   def keySet: Set[K] = underlying.keySet
 
   def getOrNull(key: K): V = {
-    val v = underlying.getOrElse(key, null)
-    if (v eq null) null.asInstanceOf[V]
-    else v.value
+    val idx = underlying.getOrElse(key, -1)
+    if (idx == -1) null.asInstanceOf[V]
+    else fields(idx).asInstanceOf[(K, V)]._2
   }
 
   def updated[V1 >: V](key: K, value: V1): UpdateOrderLinkedMap[K, V1] = {
-    val fs       = fields
-    val map      = underlying
-    val i        = fs.length
-    val existing = map.getOrElse(key, null)
-    if (existing eq null) {
-      new UpdateOrderLinkedMap(fs :+ key, map.updated(key, Value(i, value)))
-    } else if (existing.idx == i - 1) {
+    val fs     = fields
+    val map    = underlying
+    val i      = fs.length
+    val oldIdx = map.getOrElse(key, -1)
+    if (oldIdx == -1) {
+      new UpdateOrderLinkedMap(fs :+ ((key, value)), map.updated(key, i))
+    } else if (oldIdx == i - 1) {
       // If the entry to be added is at the tail of the fields, we can just update the value
-      val newMap = map.updated(key, existing.copy(value = value))
-      if (newMap eq map) self else new UpdateOrderLinkedMap(fs, newMap)
+      new UpdateOrderLinkedMap(fs.updated(oldIdx, (key, value)), map)
     } else {
       val arr = Array.ofDim[Any](i + 1)
       fs.copyToArray(arr, 0, i)
-      val newMap = updateValue[V1](map, arr, i)(key, existing, value)
-      new UpdateOrderLinkedMap(arr.toVector, newMap).maybeReindex()
+      updateArray(arr, i, oldIdx, key, value)
+      new UpdateOrderLinkedMap(arr.toVector, map.updated(key, i)).maybeReindex()
     }
   }
 
@@ -68,7 +67,7 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
         var i   = fields.length
         val arr = Array.ofDim[Any](i + n)
         fields.copyToArray(arr, 0, i)
-        var updated: HashMap[K, Value[V1]] = underlying
+        var updated: HashMap[K, Int] = underlying
 
         val it = entries.iterator
         while (it.hasNext) {
@@ -76,28 +75,26 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
           val key   = kv._1
           val value = kv._2
 
-          val existing = updated.getOrElse(key, null)
-          if (existing eq null) {
-            updated = updated.updated(key, Value(i, value))
-            arr(i) = key
+          val oldIdx = updated.getOrElse(key, -1)
+          if (oldIdx == -1) {
+            updated = updated.updated(key, i)
+            arr(i) = (key, value)
           } else {
-            updated = updateValue(updated, arr, i)(key, existing, value)
+            updateArray(arr, i, oldIdx, key, value)
+            updated = updated.updated(key, i)
           }
           i += 1
         }
         new UpdateOrderLinkedMap(arr.toVector, updated).maybeReindex()
     }
 
-  private[this] def updateValue[V1 >: V](
-    map: HashMap[K, Value[V1]],
+  private[this] def updateArray[V1 >: V](
     arr: Array[Any],
-    i: Int
-  )(
+    newIdx: Int,
+    oldIdx: Int,
     key: K,
-    oldValue: Value[V1],
     newValue: V1
-  ): HashMap[K, Value[V1]] = {
-    val oldIdx = oldValue.idx
+  ) = {
 
     // Calculate next of kin
     val next = {
@@ -134,8 +131,7 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
     if (oldIdx != first && oldIdx != last) {
       arr(oldIdx) = Tombstone(next - oldIdx)
     }
-    arr(i) = key
-    map.updated(key, Value(i, newValue))
+    arr(newIdx) = (key, newValue)
   }
 
   /**
@@ -160,25 +156,21 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
     loop()
   }
 
-  private[this] def iterator0: Iterator[(K, V)] = new AbstractIterator[(K, V)] {
+  private[this] def iterator0 = new AbstractIterator[(K, V)] {
     private[this] var slot    = -1
     private[this] val maxSlot = fields.length - 1
 
     @tailrec
-    final private[this] def findNextKey(nextSlot: Int): K =
+    final private[this] def findNextKeyValue(nextSlot: Int): (K, V) =
       fields(nextSlot) match {
-        case t: Tombstone => findNextKey(nextSlot + t.distance)
+        case t: Tombstone => findNextKeyValue(nextSlot + t.distance)
         case k =>
           slot = nextSlot
-          k.asInstanceOf[K]
+          k.asInstanceOf[(K, V)]
       }
 
     override final def hasNext: Boolean = slot < maxSlot
-
-    override final def next(): (K, V) = {
-      val key = findNextKey(slot + 1)
-      (key, underlying(key).value)
-    }
+    override final def next(): (K, V)   = findNextKeyValue(slot + 1)
   }
 
   def reverseIterator: Iterator[(K, V)] = reverseIteratorLz.iterator
@@ -192,12 +184,12 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
     loop()
   }
 
-  private def reverseIterator0: Iterator[(K, V)] = new AbstractIterator[(K, V)] {
+  private def reverseIterator0 = new AbstractIterator[(K, V)] {
     private[this] var slot      = fields.length
     private[this] var remaining = underlying.size
 
     @tailrec
-    final private[this] def findNextKey(nextSlot: Int): K =
+    final private[this] def findNextKeyValue(nextSlot: Int): (K, V) =
       fields(nextSlot) match {
         case t: Tombstone =>
           val d = t.distance
@@ -205,31 +197,21 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
             if (d < 0) nextSlot + d
             else if (d == 1) nextSlot - 1
             else throw new IllegalStateException("tombstone indicate wrong position: " + d)
-          findNextKey(dt)
-        case k =>
+          findNextKeyValue(dt)
+        case kv =>
           slot = nextSlot
           remaining -= 1
-          k.asInstanceOf[K]
+          kv.asInstanceOf[(K, V)]
       }
 
     override final def hasNext: Boolean = remaining > 0
-
-    override final def next(): (K, V) = {
-      val key = findNextKey(slot - 1)
-      (key, underlying(key).value)
-    }
+    override final def next(): (K, V)   = findNextKeyValue(slot - 1)
   }
 
   def toList: List[(K, V)] = iterator.toList
 
   def toIterable: Iterable[(K, V)] =
     new OptimizedIterable[(K, V)](iterator, size)
-
-  @throws[NoSuchElementException]("When the map is empty")
-  def last: (K, V) = {
-    val last = fields.last.asInstanceOf[K]
-    (last, underlying(last).value)
-  }
 
   override def hashCode(): Int = MurmurHash3.orderedHash(iterator)
 
@@ -238,7 +220,6 @@ private[zio] final class UpdateOrderLinkedMap[K, +V](
 
 private[zio] object UpdateOrderLinkedMap extends UpdateOrderLinkedMapCompanionVersionSpecific {
   private final case class Tombstone(distance: Int)
-  private final case class Value[+V](idx: Int, value: V)
 
   private[this] final val EmptyMap: UpdateOrderLinkedMap[Nothing, Nothing] =
     new UpdateOrderLinkedMap[Nothing, Nothing](Vector.empty, HashMap.empty)
@@ -253,14 +234,13 @@ private[zio] object UpdateOrderLinkedMap extends UpdateOrderLinkedMapCompanionVe
   private def fromUnsafe[K, V](it: Iterator[(K, V)]): UpdateOrderLinkedMap[K, V] = {
     if (it.isEmpty) return EmptyMap.asInstanceOf[UpdateOrderLinkedMap[K, V]]
 
-    val vectorBuilder = new VectorBuilder[K]
-    val mapBuilder    = HashMap.newBuilder[K, Value[V]]
+    val vectorBuilder = new VectorBuilder[(K, V)]
+    val mapBuilder    = HashMap.newBuilder[K, Int]
     var i             = 0
     while (it.hasNext) {
       val kv = it.next()
-      val k  = kv._1
-      vectorBuilder += k
-      mapBuilder += ((k, Value(i, kv._2)))
+      vectorBuilder += kv
+      mapBuilder += ((kv._1, i))
       i += 1
     }
     new UpdateOrderLinkedMap(vectorBuilder.result(), mapBuilder.result())
@@ -339,4 +319,6 @@ private[zio] object UpdateOrderLinkedMap extends UpdateOrderLinkedMapCompanionVe
       @transient protected lazy val tail: LzList[A] = _tail()
     }
   }
+
+  scala.collection.immutable.IntMap
 }
