@@ -75,8 +75,10 @@ object LoggingSpec extends ZIOBaseSpec {
             ref    <- FiberRef.make(value)
             _      <- ZIO.log("It's alive!")
             output <- ZTestLogger.logOutput
-          } yield assertTrue(output.length == 1) &&
-            assertTrue(output(0).context.get(ref).contains(value))
+          } yield assertTrue(
+            output.length == 1,
+            output(0).context.getOrDefault(ref).contains(value)
+          )
         )
       }
     )

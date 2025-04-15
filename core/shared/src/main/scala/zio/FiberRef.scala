@@ -106,7 +106,7 @@ trait FiberRef[A] extends Serializable { self =>
   def delete(implicit trace: Trace): UIO[Unit] =
     ZIO.withFiberRuntime[Any, Nothing, Unit] { (fiberState, _) =>
       fiberState.deleteFiberRef(self)
-      ZIO.unit
+      Exit.unit
     }
 
   /**
@@ -194,11 +194,10 @@ trait FiberRef[A] extends Serializable { self =>
    */
   def modify[B](f: A => (B, A))(implicit trace: Trace): UIO[B] =
     ZIO.withFiberRuntime[Any, Nothing, B] { (fiberState, _) =>
-      val (b, a) = f(fiberState.getFiberRef(self))
+      val ba = f(fiberState.getFiberRef(self))
+      fiberState.setFiberRef(self, ba._2)
 
-      fiberState.setFiberRef(self, a)
-
-      ZIO.succeed(b)
+      Exit.succeed(ba._1)
     }
 
   /**
@@ -314,7 +313,8 @@ trait FiberRef[A] extends Serializable { self =>
   private[zio] def hasIdentityFork: Boolean = false
 
   /**
-   * Flag used to determine whether join method returns
+   * Flag used to determine whether join method returns the 2nd argument passed
+   * to it.
    *
    * '''NOTE FOR ZIO LIBRARIES''' This method is package-private only so that it
    * can be accessed from `FiberRefs`. Do not use it
@@ -556,6 +556,13 @@ object FiberRef {
           Exit.unit
         }
 
+      override def update(f: Value0 => Value0)(implicit trace: Trace): UIO[Unit] =
+        ZIO.withFiberRuntime[Any, Nothing, Unit] { (fiberState, _) =>
+          fiberState.setFiberRef(self, f(fiberState.getFiberRef(self)))
+
+          Exit.unit
+        }
+
       private def setAndRestoreRefs[R, E, A](
         zio: ZIO[R, E, A],
         fiberState: Fiber.Runtime[E, A],
@@ -621,5 +628,10 @@ object FiberRef {
   private def makeWith[Value, Patch](
     ref: => FiberRef.WithPatch[Value, Patch]
   )(implicit trace: Trace): ZIO[Scope, Nothing, FiberRef.WithPatch[Value, Patch]] =
-    ZIO.acquireRelease(ZIO.succeed(ref).tap(_.update(identity)))(_.delete)
+    ZIO.acquireRelease({
+      val ref0 = ref
+      // We need to call `update` so that the FiberRef is placed within FiberRefs in case of custom fork/join
+      if (ref0.hasIdentityFork && ref0.hasSecondFnJoin) Exit.succeed(ref0)
+      else ref0.update(identity).as(ref0)
+    })(_.delete)
 }
