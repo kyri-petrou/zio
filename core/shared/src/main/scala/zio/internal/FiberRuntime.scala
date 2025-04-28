@@ -123,9 +123,11 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
 
   def interruptAsFork(fiberId: FiberId)(implicit trace: Trace): UIO[Unit] =
     ZIO.succeed {
-      val cause = Cause.interrupt(fiberId, StackTrace(self.fiberId, Chunk.single(trace)))
+      if (_exitValue eq null) {
+        val cause = Cause.interrupt(fiberId, StackTrace(self.fiberId, Chunk.single(trace)))
 
-      tell(FiberMessage.InterruptSignal(cause))
+        tell(FiberMessage.InterruptSignal(cause))
+      }
     }
 
   def location: Trace = fiberId.location
@@ -1497,7 +1499,7 @@ final class FiberRuntime[E, A](fiberId: FiberId.Runtime, fiberRefs0: FiberRefs, 
         Option(self.exitValue())
 
       override def interrupt(cause: Cause[Nothing])(implicit unsafe: Unsafe): Unit =
-        self.tellInterrupt(cause)
+        if (self._exitValue eq null) self.tellInterrupt(cause)
     }
 
   private[this] val _hashCode: Int = fiberId.hashCode()
