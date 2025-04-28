@@ -16,7 +16,6 @@
 
 package zio
 
-import zio.Cause.Both
 import zio.stacktracer.TracingImplicits.disableAutoTrace
 
 import scala.annotation.tailrec
@@ -29,14 +28,21 @@ sealed abstract class Cause[+E] extends Product with Serializable { self =>
    * Returns a cause that fails for this cause and the specified cause, in
    * parallel.
    */
-  final def &&[E1 >: E](that: Cause[E1]): Cause[E1] = Both(self, that)
+  final def &&[E1 >: E](that: Cause[E1]): Cause[E1] =
+    if (self eq Empty) that
+    else if (that eq Empty) self
+    else if (self eq that) self
+    else Both(self, that)
 
   /**
    * Returns a cause that fails for this cause and the specified cause, in
    * sequence.
    */
   final def ++[E1 >: E](that: Cause[E1]): Cause[E1] =
-    if (self eq Empty) that else if (that eq Empty) self else Then(self, that)
+    if (self eq Empty) that
+    else if (that eq Empty) self
+    else if (self eq that) self
+    else Then(self, that)
 
   /**
    * Adds the specified annotations.
