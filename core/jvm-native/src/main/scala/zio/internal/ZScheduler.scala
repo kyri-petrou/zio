@@ -30,10 +30,21 @@ import scala.concurrent.{BlockContext, CanAwait}
  * applications. Inspired by "Making the Tokio Scheduler 10X Faster" by Carl
  * Lerche. [[https://tokio.rs/blog/2019-10-scheduler]]
  */
-private final class ZScheduler(autoBlocking: Boolean) extends Executor { parent =>
+private final class ZScheduler(autoBlocking: Boolean, poolSize: Int) extends Executor { parent =>
+  assert(poolSize > 0, "Pool size must be greater than 0")
+
+  def this(autoBlocking: Boolean) =
+    this(
+      autoBlocking,
+      java.lang.Runtime.getRuntime.availableProcessors
+    )
+
+  def this(poolSize: Int) = this(false, poolSize)
+
+  def this() = this(false)
 
   import Trace.{empty => emptyTrace}
-  import ZScheduler.{poolSize, workerOrNull}
+  import ZScheduler.workerOrNull
 
   private[this] val globalQueue     = new PartitionedLinkedQueue[Runnable](poolSize * 4)
   private[this] val cache           = new ConcurrentLinkedQueue[ZScheduler.Worker]()
@@ -290,7 +301,7 @@ private final class ZScheduler(autoBlocking: Boolean) extends Executor { parent 
         val state       = parent.state
         val cache       = parent.cache
         val idle        = parent.idle
-        val poolSize    = ZScheduler.poolSize
+        val poolSize    = parent.poolSize
 
         var currentBlocking = false
         var currentOpCount  = 0L
@@ -462,8 +473,6 @@ private final class ZScheduler(autoBlocking: Boolean) extends Executor { parent 
 }
 
 private object ZScheduler {
-  private val poolSize = java.lang.Runtime.getRuntime.availableProcessors
-
   def markCurrentWorkerAsBlocking(): Unit = {
     val worker = workerOrNull()
     if (worker ne null) {
